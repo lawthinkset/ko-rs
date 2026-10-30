@@ -1,0 +1,70 @@
+name: Daily Facebook Video
+
+on:
+  schedule:
+    - cron: "45 5 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: daily-facebook-video
+  cancel-in-progress: false
+
+jobs:
+  generate-and-upload:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout repo
+      uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: "3.11"
+        cache: 'pip'
+
+    - name: Install FFmpeg & Fonts
+      run: |
+        sudo apt-get update -o Acquire::Retries=3 -o Acquire::http::Timeout=15 -o Acquire::https::Timeout=15 || true
+        sudo apt-get install -y --no-install-recommends ffmpeg fonts-dejavu-core || sudo apt-get install -y ffmpeg || true
+
+    - name: Cache Vosk Model
+      uses: actions/cache@v3
+      with:
+        path: vosk-model*
+
+    - name: Install dependencies
+      run: |
+        pip install --upgrade pip
+        pip install -r requirements.txt
+        pip install --upgrade edge-tts
+
+    - name: Generate video
+      env:
+        POLLINATIONS_API_KEY: ${{ secrets.POLLINATIONS_API_KEY }}
+        GOOGLE_SERVICE_ACCOUNT_KEY: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_KEY }}
+        GOOGLE_DRIVE_FOLDER_ID: ${{ secrets.GOOGLE_DRIVE_FOLDER_ID }}
+      run: |
+        python main.py
+
+    - name: Upload to Facebook
+      env:
+        FB_ACCESS_TOKEN: ${{ secrets.FB_ACCESS_TOKEN }}
+        FB_PAGE_ID: ${{ secrets.FB_PAGE_ID }}
+      run: |
+        python upload_facebook_only.py
+
+    - name: Commit updated topics and tracking files
+      if: always()
+      run: |
+        git config --global user.name "github-actions[bot]"
+        git config --global user.email "github-actions[bot]@users.noreply.github.com"
+        git stash --include-untracked || true
+        git pull --rebase origin main || true
+        git stash pop || true
+        git add topics.txt used_topics.txt used_images.json 2>/dev/null || true
+        git diff --staged --quiet || git commit -m "🔄 Auto-update: Track used topics and images [skip ci]"
+        git push || true
